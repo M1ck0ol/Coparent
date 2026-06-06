@@ -511,9 +511,9 @@ export default function App() {
                               ))
                             )}
                             <div style={{ marginTop:10, display:"flex", justifyContent:"space-between", alignItems:"center" }}>
-                              <span style={{ fontSize:12, color: vTotal>=rac/2-0.01?"#40d090":"#e05060" }}>
-                                {vTotal>=rac/2-0.01 ? "✓ Soldé" : `Reste à verser : ${fmt(rac/2-vTotal)}`}
-                              </span>
+                              <span style={{ fontSize:12, color: (() => { const diff = e.payer==="Les deux" ? Math.abs(racMoi(e)-racElle(e))/2 : rac/2; return vTotal>=diff-0.01?"#40d090":"#e05060"; })() }}>
+  {(() => { const diff = e.payer==="Les deux" ? Math.abs(racMoi(e)-racElle(e))/2 : rac/2; return vTotal>=diff-0.01 ? "✓ Soldé" : `Reste à verser : ${fmt(diff-vTotal)}`; })()}
+</span>
                               <button className="action-btn" style={{ background:"#1e3a2f", color:"#40d090" }} onClick={()=>openVersement(e.id)}>+ Versement</button>
                             </div>
                           </div>
