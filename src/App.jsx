@@ -24,6 +24,30 @@ function resteACharge(e) {
     - parseFloat(e.remboMutuelleSabrina || 0)
   );
 }
+// Montant payé par "Moi" dans une dépense (RAC)
+function racMoi(e) {
+  const rac = resteACharge(e);
+  if (e.payer === "Moi") return rac;
+  if (e.payer === "Elle") return 0;
+  if (e.payer === "Les deux") {
+    // On utilise les montants partagés si disponibles
+    const totalPaye = parseFloat(e.amountMoi || 0) + parseFloat(e.amountElle || 0);
+    if (totalPaye === 0) return rac / 2;
+    return rac * (parseFloat(e.amountMoi || 0) / totalPaye);
+  }
+  return 0;
+}
+function racElle(e) {
+  const rac = resteACharge(e);
+  if (e.payer === "Elle") return rac;
+  if (e.payer === "Moi") return 0;
+  if (e.payer === "Les deux") {
+    const totalPaye = parseFloat(e.amountMoi || 0) + parseFloat(e.amountElle || 0);
+    if (totalPaye === 0) return rac / 2;
+    return rac * (parseFloat(e.amountElle || 0) / totalPaye);
+  }
+  return 0;
+}
 function versementTotal(e) {
   return (e.versements || []).reduce((s, v) => s + parseFloat(v.amount || 0), 0);
 }
@@ -31,7 +55,7 @@ function todayISO() { return new Date().toISOString().slice(0, 10); }
 
 const CATEGORIES_EXPENSE = ["Médical", "Scolaire", "Vêtements", "Loisirs", "Alimentation", "Transport", "Autre"];
 const CATEGORIES_EVENT   = ["Médecin", "Dentiste", "École", "Réunion", "Activité", "Vacances", "Autre"];
-const PAYERS       = ["Moi", "Elle"];
+const PAYERS       = ["Moi", "Elle", "Les deux"];
 const CHILDREN_OPTS = ["Les deux", "Nathan", "Lucas"];
 
 // ─── CSS ─────────────────────────────────────────────────────────────────────
@@ -49,6 +73,7 @@ button{cursor:pointer;font-family:inherit}
 .chip{display:inline-block;padding:2px 10px;border-radius:20px;font-size:11px;font-weight:600}
 .chip-moi{background:#1e3a5f;color:#60aaff}
 .chip-elle{background:#3d1e3a;color:#e060e0}
+.chip-deux{background:#2a2a1e;color:#f0c040}
 .chip-cat{background:#1f2235;color:#aaa}
 .fab{position:fixed;bottom:90px;right:20px;width:52px;height:52px;border-radius:50%;background:#f0c040;color:#0f1117;border:none;font-size:26px;display:flex;align-items:center;justify-content:center;box-shadow:0 4px 20px rgba(240,192,64,.35);z-index:100;transition:transform .15s}
 .fab:active{transform:scale(.92)}
@@ -98,6 +123,7 @@ button{cursor:pointer;font-family:inherit}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
 .login-wrap{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}
 .login-box{background:#181b26;border-radius:20px;padding:36px 28px;width:100%;max-width:360px;border:1px solid #23263a;text-align:center}
+.partage-box{background:#1f2235;border-radius:10px;padding:12px;margin-bottom:14px;border:1px solid #2e3150}
 `;
 
 // ─── LOGIN ────────────────────────────────────────────────────────────────────
@@ -142,7 +168,6 @@ export default function App() {
   const [expandedExpense, setExpandedExpense] = useState(null);
   const [toast, setToast]               = useState(null);
 
-  // ── Firebase realtime listeners ──
   useEffect(() => {
     if (!authed) return;
     const unsubExp = onSnapshot(collection(db, "expenses"), snap => {
@@ -158,19 +183,28 @@ export default function App() {
   const showToast = (msg) => { setToast(msg); setTimeout(() => setToast(null), 2800); };
 
   // ── FINANCE CALCS ──
-  const totalMoi  = expenses.filter(e=>e.payer==="Moi").reduce((s,e)=>s+resteACharge(e),0);
-  const totalElle = expenses.filter(e=>e.payer==="Elle").reduce((s,e)=>s+resteACharge(e),0);
+  const totalMoi  = expenses.reduce((s,e) => s + racMoi(e), 0);
+  const totalElle = expenses.reduce((s,e) => s + racElle(e), 0);
   const totalAll  = totalMoi + totalElle;
   const fairShare = totalAll / 2;
-  const totalVersementsElleVersMoi = expenses.filter(e=>e.payer==="Moi")
+  const totalVersementsElleVersMoi = expenses
     .reduce((s,e)=>s+(e.versements||[]).filter(v=>v.de==="Elle").reduce((ss,v)=>ss+parseFloat(v.amount||0),0),0);
-  const totalVersementsMoiVersElle = expenses.filter(e=>e.payer==="Elle")
+  const totalVersementsMoiVersElle = expenses
     .reduce((s,e)=>s+(e.versements||[]).filter(v=>v.de==="Moi").reduce((ss,v)=>ss+parseFloat(v.amount||0),0),0);
   const balanceNette = (totalMoi - fairShare) - totalVersementsElleVersMoi + totalVersementsMoiVersElle;
 
   // ── EXPENSE FORM ──
-  const emptyExpense = { date:todayISO(), label:"", amount:"", payer:"Moi", category:"Médical", child:"Les deux", note:"", remboSecu:"", remboMutuelle:"", remboMutuelleSabrina:"", versements:[] };
+  const emptyExpense = { date:todayISO(), label:"", amount:"", payer:"Moi", amountMoi:"", amountElle:"", category:"Médical", child:"Les deux", note:"", remboSecu:"", remboMutuelle:"", remboMutuelleSabrina:"", versements:[] };
   const [expForm, setExpForm] = useState(emptyExpense);
+
+  // Sync automatique du montant total quand payer=Les deux
+  const handleAmountMoiElle = (field, value) => {
+    const updated = { ...expForm, [field]: value };
+    const total = parseFloat(updated.amountMoi || 0) + parseFloat(updated.amountElle || 0);
+    updated.amount = total > 0 ? total.toFixed(2) : expForm.amount;
+    setExpForm(updated);
+  };
+
   const openAddExpense  = () => { setExpForm(emptyExpense); setEditExpense(null); setExpenseModal(true); };
   const openEditExpense = (e) => { setExpForm({...e}); setEditExpense(e.id); setExpenseModal(true); };
   const saveExpense = async () => {
@@ -336,11 +370,11 @@ export default function App() {
                       <div style={{ flex:1 }}>
                         <div style={{ fontWeight:500, fontSize:14 }}>{e.label}</div>
                         <div style={{ marginTop:3, display:"flex", gap:6 }}>
-                          <span className={`chip ${e.payer==="Moi"?"chip-moi":"chip-elle"}`}>{e.payer}</span>
+                          <span className={`chip ${e.payer==="Moi"?"chip-moi":e.payer==="Elle"?"chip-elle":"chip-deux"}`}>{e.payer}</span>
                           <span className="chip chip-cat">{e.category}</span>
                         </div>
                       </div>
-                      <div className={`amount-badge ${e.payer==="Moi"?"balance-pos":"balance-neg"}`}>{fmt(e.amount)}</div>
+                      <div className="amount-badge" style={{ color:"#e8e6e0" }}>{fmt(e.amount)}</div>
                     </div>
                   ))}
                 </div>
@@ -395,6 +429,8 @@ export default function App() {
                     const rac = resteACharge(e);
                     const vTotal = versementTotal(e);
                     const expanded = expandedExpense===e.id;
+                    const rmoi = racMoi(e);
+                    const relle = racElle(e);
                     return (
                       <div key={e.id} className="expense-row" style={{ flexDirection:"column", gap:0 }}>
                         <div style={{ display:"flex", gap:12, width:"100%" }}>
@@ -402,10 +438,17 @@ export default function App() {
                           <div style={{ flex:1 }}>
                             <div style={{ fontWeight:500, fontSize:14 }}>{e.label}</div>
                             <div style={{ marginTop:3, display:"flex", gap:5, flexWrap:"wrap" }}>
-                              <span className={`chip ${e.payer==="Moi"?"chip-moi":"chip-elle"}`}>{e.payer}</span>
+                              <span className={`chip ${e.payer==="Moi"?"chip-moi":e.payer==="Elle"?"chip-elle":"chip-deux"}`}>{e.payer}</span>
                               <span className="chip chip-cat">{e.category}</span>
                               <span className="chip chip-cat">{e.child}</span>
                             </div>
+                            {e.payer==="Les deux" && (
+                              <div style={{ fontSize:11, color:"#888", marginTop:3 }}>
+                                <span style={{ color:"#60aaff" }}>Toi : {fmt(e.amountMoi)}</span>
+                                <span style={{ margin:"0 6px", color:"#444" }}>·</span>
+                                <span style={{ color:"#e060e0" }}>Elle : {fmt(e.amountElle)}</span>
+                              </div>
+                            )}
                             {e.note && <div style={{ fontSize:12, color:"#666", marginTop:4 }}>{e.note}</div>}
                             <div className="action-row">
                               <button className="action-btn" onClick={()=>setExpandedExpense(expanded?null:e.id)}>
@@ -416,14 +459,14 @@ export default function App() {
                             </div>
                           </div>
                           <div style={{ textAlign:"right" }}>
-                            <div className={`amount-badge ${e.payer==="Moi"?"balance-pos":"balance-neg"}`}>{fmt(e.amount)}</div>
+                            <div className="amount-badge" style={{ color:"#e8e6e0" }}>{fmt(e.amount)}</div>
                             {rac!==parseFloat(e.amount||0) && <div style={{ fontSize:11, color:"#888", marginTop:2 }}>RAC : {fmt(rac)}</div>}
                           </div>
                         </div>
 
                         {expanded && (
                           <div style={{ marginTop:10, background:"#1a1d27", borderRadius:10, padding:12, width:"100%" }}>
-                            {/* Remboursements */}
+                            {/* Remboursements sécu/mutuelle */}
                             <div style={{ fontSize:12, color:"#888", marginBottom:8, fontWeight:600 }}>REMBOURSEMENTS</div>
                             <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:8, marginBottom:10, textAlign:"center" }}>
                               <div><div style={{ fontSize:10, color:"#666" }}>Sécu</div><div style={{ color:"#f0c040", fontWeight:600 }}>{fmt(e.remboSecu)}</div></div>
@@ -435,8 +478,21 @@ export default function App() {
                               <span style={{ color:"#555", marginLeft:6 }}>· Moitié : <strong>{fmt(rac/2)}</strong></span>
                             </div>
 
+                            {/* Part de chacun */}
+                            <div style={{ fontSize:12, color:"#888", marginBottom:8, fontWeight:600 }}>PART DE CHACUN (RAC)</div>
+                            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8, marginBottom:12, textAlign:"center" }}>
+                              <div style={{ background:"#1e2a3a", borderRadius:8, padding:"8px 4px" }}>
+                                <div style={{ fontSize:10, color:"#60aaff", marginBottom:3 }}>Toi</div>
+                                <div style={{ color:"#60aaff", fontWeight:700 }}>{fmt(rmoi)}</div>
+                              </div>
+                              <div style={{ background:"#2a1e2a", borderRadius:8, padding:"8px 4px" }}>
+                                <div style={{ fontSize:10, color:"#e060e0", marginBottom:3 }}>Elle</div>
+                                <div style={{ color:"#e060e0", fontWeight:700 }}>{fmt(relle)}</div>
+                              </div>
+                            </div>
+
                             {/* Versements */}
-                            <div style={{ fontSize:12, color:"#888", marginBottom:8, fontWeight:600 }}>VERSEMENTS</div>
+                            <div style={{ fontSize:12, color:"#888", marginBottom:8, fontWeight:600 }}>VERSEMENTS ENTRE VOUS</div>
                             {(e.versements||[]).length===0 ? (
                               <div style={{ fontSize:12, color:"#555", marginBottom:8 }}>Aucun versement enregistré.</div>
                             ) : (
@@ -531,18 +587,44 @@ export default function App() {
               <div className="modal-title">{editExpense?"Modifier la dépense":"Nouvelle dépense"}</div>
               <div className="field"><label>Date</label><input type="date" value={expForm.date} onChange={e=>setExpForm(f=>({...f,date:e.target.value}))} /></div>
               <div className="field"><label>Description *</label><input type="text" placeholder="Ex: Médecin généraliste" value={expForm.label} onChange={e=>setExpForm(f=>({...f,label:e.target.value}))} /></div>
-              <div className="field"><label>Montant total payé (€) *</label><input type="number" step="0.01" min="0" placeholder="0.00" value={expForm.amount} onChange={e=>setExpForm(f=>({...f,amount:e.target.value}))} /></div>
-              <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
-                <div className="field"><label>Payé par</label>
-                  <select value={expForm.payer} onChange={e=>setExpForm(f=>({...f,payer:e.target.value}))}>
-                    {PAYERS.map(p=><option key={p}>{p}</option>)}
-                  </select>
+
+              <div className="field"><label>Payé par</label>
+                <select value={expForm.payer} onChange={e=>setExpForm(f=>({...f, payer:e.target.value, amountMoi:"", amountElle:""}))}>
+                  {PAYERS.map(p=><option key={p}>{p}</option>)}
+                </select>
+              </div>
+
+              {expForm.payer !== "Les deux" ? (
+                <div className="field"><label>Montant total payé (€) *</label>
+                  <input type="number" step="0.01" min="0" placeholder="0.00" value={expForm.amount} onChange={e=>setExpForm(f=>({...f,amount:e.target.value}))} />
                 </div>
-                <div className="field"><label>Enfant(s)</label>
-                  <select value={expForm.child} onChange={e=>setExpForm(f=>({...f,child:e.target.value}))}>
-                    {CHILDREN_OPTS.map(c=><option key={c}>{c}</option>)}
-                  </select>
+              ) : (
+                <div className="partage-box">
+                  <div style={{ fontSize:11, color:"#f0c040", fontWeight:600, marginBottom:10, textTransform:"uppercase", letterSpacing:".05em" }}>Montants payés par chacun</div>
+                  <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
+                    <div className="field" style={{ marginBottom:0 }}>
+                      <label style={{ color:"#60aaff" }}>Toi (€) *</label>
+                      <input type="number" step="0.01" min="0" placeholder="0.00" value={expForm.amountMoi}
+                        onChange={e=>handleAmountMoiElle("amountMoi", e.target.value)} />
+                    </div>
+                    <div className="field" style={{ marginBottom:0 }}>
+                      <label style={{ color:"#e060e0" }}>Elle (€) *</label>
+                      <input type="number" step="0.01" min="0" placeholder="0.00" value={expForm.amountElle}
+                        onChange={e=>handleAmountMoiElle("amountElle", e.target.value)} />
+                    </div>
+                  </div>
+                  {(parseFloat(expForm.amountMoi||0) + parseFloat(expForm.amountElle||0)) > 0 && (
+                    <div style={{ marginTop:8, fontSize:12, color:"#888", textAlign:"center" }}>
+                      Total : <strong style={{ color:"#e8e6e0" }}>{fmt(parseFloat(expForm.amountMoi||0) + parseFloat(expForm.amountElle||0))}</strong>
+                    </div>
+                  )}
                 </div>
+              )}
+
+              <div className="field"><label>Enfant(s)</label>
+                <select value={expForm.child} onChange={e=>setExpForm(f=>({...f,child:e.target.value}))}>
+                  {CHILDREN_OPTS.map(c=><option key={c}>{c}</option>)}
+                </select>
               </div>
               <div className="field"><label>Catégorie</label>
                 <select value={expForm.category} onChange={e=>setExpForm(f=>({...f,category:e.target.value}))}>
@@ -603,7 +685,7 @@ export default function App() {
                 <div className="field"><label>Montant versé (€)</label><input type="number" step="0.01" min="0" placeholder="0.00" value={vForm.amount} onChange={e=>setVForm(f=>({...f,amount:e.target.value}))} /></div>
                 <div className="field"><label>Versé par</label>
                   <select value={vForm.de} onChange={e=>setVForm(f=>({...f,de:e.target.value}))}>
-                    {PAYERS.map(p=><option key={p}>{p}</option>)}
+                    {["Moi","Elle"].map(p=><option key={p}>{p}</option>)}
                   </select>
                 </div>
                 <div className="field"><label>Note (optionnel)</label><input type="text" placeholder="Ex: virement du 12 mars" value={vForm.note} onChange={e=>setVForm(f=>({...f,note:e.target.value}))} /></div>
